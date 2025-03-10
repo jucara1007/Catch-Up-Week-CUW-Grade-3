@@ -636,6 +636,7 @@
         schedule: scheduleData
       }).then(() => {
         alert("Horario guardado exitosamente.");
+        // Esperar un breve momento para que se actualice el resumen y luego descargar la imagen
         setTimeout(downloadImage, 1000);
       }).catch(error => {
         console.error("Error al guardar el horario:", error);
@@ -645,31 +646,196 @@
 
     /***************** RESET (ESTUDIANTE) *****************/
     document.getElementById('resetBtn').addEventListener('click', function() {
-      // Reiniciar los selects en la interfaz
       document.querySelectorAll('#scheduleTable select').forEach(select => {
         select.value = "";
         select.setAttribute('data-prev', "");
       });
       recalcCredits();
       updateSummaryTable();
-      // Construir un horario vacío para actualizar Firestore
-      let emptySchedule = {};
-      hours.forEach(hour => {
-        emptySchedule[hour] = {};
-        days.forEach(day => {
-          emptySchedule[hour][day] = "";
-        });
-      });
-      // Actualizar Firestore con el horario vacío
-      db.collection("studentSchedules").doc(currentUser.username).set({
-        fullName: currentUser.fullName,
-        schedule: emptySchedule
-      }).then(() => {
-        alert("Horario reiniciado exitosamente.");
-      }).catch(error => {
-        console.error("Error al reiniciar el horario:", error);
-        alert("Error al reiniciar el horario.");
+    });
+
+    /***************** EXPORTAR EN IMAGEN PNG (ESTUDIANTE) *****************/
+    document.getElementById('exportPngBtn').addEventListener('click', function() {
+      const element = document.getElementById('summaryContainer');
+      html2canvas(element, { scale: 2 }).then(canvas => {
+        const dataURL = canvas.toDataURL("image/png");
+        const link = document.createElement('a');
+        const fileName = currentUser && currentUser.fullName 
+          ? "Resumen del Horario - " + currentUser.fullName + ".png" 
+          : "Resumen_Horario.png";
+        link.href = dataURL;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }).catch(err => {
+        console.error("Error generando la imagen PNG:", err);
       });
     });
 
-    /
+    /***************** EXPORTAR EN PDF (ESTUDIANTE) *****************/
+    document.getElementById('exportPdfBtn').addEventListener('click', function() {
+      const element = document.getElementById('summaryContainer');
+      const opt = {
+        margin: 1,
+        filename: currentUser && currentUser.fullName 
+                  ? "Resumen del Horario - " + currentUser.fullName + ".pdf"
+                  : "Resumen_Horario.pdf",
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2 },
+        jsPDF: { unit: 'cm', format: 'letter', orientation: 'landscape' }
+      };
+      html2pdf().set(opt).from(element).save();
+    });
+
+    /***************** DESCARGAR IMAGEN DEL RESUMEN (USADO EN GUARDAR HORARIO) *****************/
+    function downloadImage() {
+      const summaryHeader = document.querySelector('#summaryContainer h2');
+      const originalHeader = summaryHeader.textContent;
+      if (currentUser && currentUser.fullName) {
+        summaryHeader.textContent = "Resumen del Horario - " + currentUser.fullName;
+      }
+      const element = document.getElementById('summaryContainer');
+      html2canvas(element, { scale: 2 }).then(canvas => {
+        const dataURL = canvas.toDataURL("image/jpeg", 0.98);
+        const link = document.createElement('a');
+        const fileName = currentUser && currentUser.fullName 
+          ? "Resumen del Horario - " + currentUser.fullName + ".jpg" 
+          : "Resumen_Horario.jpg";
+        link.href = dataURL;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        summaryHeader.textContent = originalHeader;
+      }).catch(err => {
+        console.error("Error generando la imagen:", err);
+      });
+    }
+
+    /***************** DASHBOARD DOCENTE *****************/
+    document.getElementById('generateReportBtn').addEventListener('click', function() {
+      const subjectsForTeacher = [];
+      for (const subj in teacherSubjects) {
+        if (teacherSubjects[subj].includes(currentUser.fullName)) {
+          subjectsForTeacher.push(subj);
+        }
+      }
+      const reportData = {};
+      hours.forEach(hour => {
+        reportData[hour] = {};
+        days.forEach(day => {
+          reportData[hour][day] = [];
+        });
+      });
+      db.collection("studentSchedules").get().then(querySnapshot => {
+        querySnapshot.forEach(doc => {
+          const data = doc.data();
+          const schedule = data.schedule;
+          for (const hour in schedule) {
+            for (const day in schedule[hour]) {
+              const selection = schedule[hour][day];
+              if (selection && selection.trim() !== "") {
+                const subj = getSubjectName(selection);
+                if (subjectsForTeacher.includes(subj)) {
+                  if (!reportData[hour][day].includes(data.fullName)) {
+                    reportData[hour][day].push(data.fullName);
+                  }
+                }
+              }
+            }
+          }
+        });
+        const reportContainer = document.getElementById('reportContainer');
+        reportContainer.innerHTML = "";
+        const table = document.createElement('table');
+        const header = document.createElement('tr');
+        const thHour = document.createElement('th');
+        thHour.textContent = "Hour";
+        header.appendChild(thHour);
+        days.forEach(day => {
+          const th = document.createElement('th');
+          th.textContent = day;
+          header.appendChild(th);
+        });
+        table.appendChild(header);
+        hours.forEach(hour => {
+          const tr = document.createElement('tr');
+          const tdHour = document.createElement('td');
+          tdHour.textContent = hour;
+          tr.appendChild(tdHour);
+          days.forEach(day => {
+            const td = document.createElement('td');
+            // Separar los nombres por renglones usando <br>
+            td.innerHTML = reportData[hour][day].join("<br>");
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+        reportContainer.appendChild(table);
+      }).catch(error => {
+        console.error("Error obteniendo los horarios:", error);
+      });
+    });
+
+    document.getElementById('exportReportBtn').addEventListener('click', function() {
+      const table = document.querySelector('#reportContainer table');
+      let csv = "";
+      for (let i = 0; i < table.rows.length; i++){
+        let row = [];
+        for (let j = 0; j < table.rows[i].cells.length; j++){
+          row.push('"' + table.rows[i].cells[j].innerText + '"');
+        }
+        csv += row.join(",") + "\n";
+      }
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      link.setAttribute("download", "Teacher_Report.csv");
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
+
+    /***************** BOTÓN DE LOGOUT *****************/
+    function logout() {
+      currentUser = null;
+      currentRole = null;
+      document.getElementById('loginContainer').style.display = "block";
+      document.getElementById('studentContainer').style.display = "none";
+      document.getElementById('teacherContainer').style.display = "none";
+      document.getElementById('loginForm').reset();
+    }
+
+    /***************** CARGAR HORARIO (ESTUDIANTE) *****************/
+    function loadStudentSchedule() {
+      db.collection("studentSchedules").doc(currentUser.username).get().then(doc => {
+        if(doc.exists) {
+          const savedSchedule = doc.data().schedule;
+          document.querySelectorAll('#scheduleTable tbody tr').forEach((row, i) => {
+            const hour = row.children[0].textContent;
+            if(savedSchedule[hour]) {
+              days.forEach((day, j) => {
+                const cell = row.children[j+1];
+                if(cell) {
+                  const select = cell.querySelector('select');
+                  if(select && savedSchedule[hour][day] !== undefined) {
+                    select.value = savedSchedule[hour][day];
+                    select.setAttribute('data-prev', savedSchedule[hour][day]);
+                  }
+                }
+              });
+            }
+          });
+          recalcCredits();
+          updateSummaryTable();
+        }
+      }).catch(error => {
+        console.error("Error cargando el horario:", error);
+      });
+    }
+  </script>
+</body>
+</html>
